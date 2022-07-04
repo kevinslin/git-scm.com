@@ -1,6 +1,7 @@
 # rubocop:disable Style/FrozenStringLiteralComment
 
 require "asciidoctor"
+require 'digest'
 require "octokit"
 require "time"
 require "digest/sha1"
@@ -133,10 +134,24 @@ def drop_uninteresting_tags(tags)
     return ret
 end
 
+IGNORE_LIST = ["git-bisect-lk2009",
+  "git-credential-cache--daemon",
+  "git-fsmonitor--daemon",
+  "git-remote-helpers.txto",
+  "git-sh-i18n--envsubst",
+  "git-config"
+]
+
 def index_doc(filter_tags, doc_list, get_content)
   ActiveRecord::Base.logger.level = Logger::WARN
   rebuild = ENV["REBUILD_DOC"]
   rerun = ENV["RERUN"] || rebuild || false
+
+  # BOND2
+  base = "/tmp/git/"
+  FileUtils.rm_rf base if base.present?
+  Dir.mkdir base
+  # BOND2 END
 
   tags = filter_tags.call(rebuild).sort_by { |tag| Version.version_to_num(tag.first[1..-1]) }
   drop_uninteresting_tags(tags).each do |tag|
@@ -253,29 +268,40 @@ def index_doc(filter_tags, doc_list, get_content)
 
         content = expand_content((get_content.call sha).force_encoding("UTF-8"), path, get_content_f, generated)
         content.gsub!(/link:(?:technical\/)?(\S*?)\.html(\#\S*?)?\[(.*?)\]/m, "link:/docs/\\1\\2[\\3]")
-        asciidoc = make_asciidoc(content)
-        asciidoc_sha = Digest::SHA1.hexdigest(asciidoc.source)
-        doc = Doc.where(blob_sha: asciidoc_sha).first_or_create
-        if rerun || !doc.plain || !doc.html
-          html = asciidoc.render
-          html.gsub!(/linkgit:(\S+)\[(\d+)\]/) do |line|
-            x = /^linkgit:(\S+)\[(\d+)\]/.match(line)
-            line = "<a href='/docs/#{x[1]}'>#{x[1]}[#{x[2]}]</a>"
-          end
-          #HTML anchor on hdlist1 (i.e. command options)
-          html.gsub!(/<dt class="hdlist1">(.*?)<\/dt>/) do |m|
-            text = $1.tr("^A-Za-z0-9-", "")
-            anchor = "#{path}-#{text}"
-            "<dt class=\"hdlist1\" id=\"#{anchor}\"> <a class=\"anchor\" href=\"##{anchor}\"></a>#{$1} </dt>"
-          end
-          doc.plain = asciidoc.source
-          doc.html  = html
-          doc.save
+
+        # BOND
+        if docname.start_with? "git-" and !IGNORE_LIST.include?(docname)
+          puts "writing #{docname}"
+          id = Digest::MD5.hexdigest content
+          title = content[/.*/]
+          fm = ["---","id: #{id}", "title: '#{title.sub('(1)', '')}'", "---"].join("\n")
+          cleanname = "git.cmd." + docname.sub("git-", "") + ".md"
+          File.open(base + cleanname, "w") { |f| f.write "#{fm}\n\n" + content }
         end
-        dv = DocVersion.where(version_id: stag.id, doc_file_id: file.id, language: "en").first_or_create
-        dv.doc_id = doc.id
-        dv.language = "en"
-        dv.save
+        # puts docname
+        # asciidoc = make_asciidoc(content)
+        # asciidoc_sha = Digest::SHA1.hexdigest(asciidoc.source)
+        # doc = Doc.where(blob_sha: asciidoc_sha).first_or_create
+        # if rerun || !doc.plain || !doc.html
+        #   html = asciidoc.render
+        #   html.gsub!(/linkgit:(\S+)\[(\d+)\]/) do |line|
+        #     x = /^linkgit:(\S+)\[(\d+)\]/.match(line)
+        #     line = "<a href='/docs/#{x[1]}'>#{x[1]}[#{x[2]}]</a>"
+        #   end
+        #   #HTML anchor on hdlist1 (i.e. command options)
+        #   html.gsub!(/<dt class="hdlist1">(.*?)<\/dt>/) do |m|
+        #     text = $1.tr("^A-Za-z0-9-", "")
+        #     anchor = "#{path}-#{text}"
+        #     "<dt class=\"hdlist1\" id=\"#{anchor}\"> <a class=\"anchor\" href=\"##{anchor}\"></a>#{$1} </dt>"
+        #   end
+        #   doc.plain = asciidoc.source
+        #   doc.html  = html
+        #   doc.save
+        # end
+        # dv = DocVersion.where(version_id: stag.id, doc_file_id: file.id, language: "en").first_or_create
+        # dv.doc_id = doc.id
+        # dv.language = "en"
+        # dv.save
       end
 
     end
